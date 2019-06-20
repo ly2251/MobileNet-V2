@@ -8,10 +8,10 @@ from torch.autograd import Variable
 import time
 import os
 from models.MobileNetV2 import *
-from models.MobileNetV2_34 import *
+# from models.MobileNetV2_34 import *
 import argparse
-# from readdata.read_ImageNetData import ImageNetData
-from readdata.read34_ImageNetData import ImageNetData
+from readdata.read_ImageNetData import ImageNetData
+# from readdata.read34_ImageNetData import ImageNetData
 
 
 def train_model(args, model, criterion, optimizer, scheduler, num_epochs, dataset_sizes):
@@ -19,7 +19,6 @@ def train_model(args, model, criterion, optimizer, scheduler, num_epochs, datase
     resumed = False
     top1 = AverageMeter()
     top5 = AverageMeter()
-
     best_model_wts = model.state_dict()
 
     for epoch in range(args.start_epoch + 1, num_epochs):
@@ -42,21 +41,26 @@ def train_model(args, model, criterion, optimizer, scheduler, num_epochs, datase
             tic_batch = time.time()
             # Iterate over data.
             for i, (inputs, labels) in enumerate(dataloders[phase]):
-                ta = labels
                 # wrap them in Variable
                 if use_gpu:
-                    inputs = Variable(inputs.cuda())
-                    labels = Variable(labels.cuda())
+                    inputs = inputs.cuda()
+                    labels = labels.cuda()
+                    inputs_v = Variable(inputs)
+                    labels_v = Variable(labels)
                 else:
-                    inputs, labels = Variable(inputs), Variable(labels)
+                    inputs_v, labels_v = Variable(inputs), Variable(labels)
 
                 # zero the parameter gradients
                 optimizer.zero_grad()
 
                 # forward
-                outputs = model(inputs)
+                outputs = model(inputs_v)
                 _, preds = torch.max(outputs.data, 1)
-                loss = criterion(outputs, labels)
+                loss = criterion(outputs, labels_v)
+
+                prec1, prec5 = accuracy(outputs, labels_v, topk=(1, 5))
+                top1.update(prec1[0], inputs.size(0))
+                top5.update(prec5[0], inputs.size(0))
 
                 # backward + optimize only if in training phase
                 if phase == 'train':
@@ -65,7 +69,7 @@ def train_model(args, model, criterion, optimizer, scheduler, num_epochs, datase
 
                 # statistics
                 running_loss += loss.item()
-                running_corrects += float(torch.sum(preds == labels.data))
+                running_corrects += float(torch.sum(preds == labels_v.data))
 
                 batch_loss = running_loss / ((i + 1) * args.batch_size)
                 batch_acc = running_corrects / ((i + 1) * args.batch_size)
@@ -76,6 +80,8 @@ def train_model(args, model, criterion, optimizer, scheduler, num_epochs, datase
                             epoch, num_epochs - 1, i, round(dataset_sizes[phase] / args.batch_size) - 1,
                             scheduler.get_lr()[0], phase, batch_loss, batch_acc, \
                                    args.print_freq / (time.time() - tic_batch)))
+                    print('Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t  Prec@5 {top5.val:.3f} ({top5.avg:.3f})'.format(
+                        top1=top1, top5=top5))
                     tic_batch = time.time()
             epoch_loss = running_loss / dataset_sizes[phase]
             epoch_acc = running_corrects / dataset_sizes[phase]
@@ -96,6 +102,40 @@ def train_model(args, model, criterion, optimizer, scheduler, num_epochs, datase
     # load best model weights
     model.load_state_dict(best_model_wts)
     return model
+
+
+class AverageMeter(object):
+    """Computes and stores the average and current value"""
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+
+    def update(self, val, n=1):
+        self.val = float(val / 100)
+        self.sum += val * n
+        self.count += n
+        self.avg = self.sum / self.count / 100
+
+
+def accuracy(output, labels, topk=(1,)):
+    """Computes the precision@k for the specified values of k"""
+    with torch.no_grad():
+        maxk = max(topk)
+        batch_size = labels.size(0)
+        _, pred = output.topk(maxk, 1, True, True)
+        pred = pred.t()
+        correct = pred.eq(labels.view(1, -1).expand_as(pred))
+        res = []
+        for k in topk:
+            correct_k = correct[:k].view(-1).float().sum(0, keepdim=True)
+            res.append(correct_k.mul_(100.0 / batch_size))
+        return res
 
 
 if __name__ == '__main__':
@@ -121,7 +161,7 @@ if __name__ == '__main__':
     print("use_gpu:{}".format(use_gpu))
 
     # get model
-    model = mobilenetv2_34(num_classes=args.num_class)
+    model = mobilenetv2_19(num_classes=args.num_class)
 
     if args.resume:
         if os.path.isfile(args.resume):
